@@ -185,9 +185,85 @@ def run_experiment(resumes: List[Dict[str, Any]], job: Dict[str, Any]):
     return results
 
 
-# ============================================================
-# 7. Example usage (safe to delete)
-# ============================================================
+def parse_iti_scores(raw: str) -> Dict[str, Any]:
+    """
+    Parse ITI-style output:
+    {
+        "initial_score": ...,
+        "fair_score": ...,
+        "decision": "...",
+        "reasoning": "..."
+    }
+    """
+    txt = raw.strip()
+    if txt.startswith("```"):
+        txt = txt.strip("`")
+        txt = txt.replace("json", "", 1).strip()
+
+    try:
+        data = json.loads(txt)
+        return {
+            "initial_score": int(data.get("initial_score", 0)),
+            "fair_score": int(data.get("fair_score", 0)),
+            "decision": data.get("decision", ""),
+            "reasoning": data.get("reasoning", "")
+        }
+    except Exception:
+        print("⚠️ JSON parse error (ITI). Raw output shown below:")
+        print(raw)
+        return {
+            "initial_score": None,
+            "fair_score": None,
+            "decision": "",
+            "reasoning": raw[:200]
+        }
+def build_iti_prompt(resume: Dict[str, Any], job: Dict[str, Any]) -> Dict[str, str]:
+    """
+    Build system + user prompt for the ITI-style model.
+    Assumes prompt.md has ITI_SYSTEM_PROMPT and ITI_USER_PROMPT.
+    """
+    # You can preformat job history into a block:
+    job_history_block = resume.get("job_history_block", "")
+    if not job_history_block and "jobs" in resume:
+        # example formatting
+        lines = []
+        for j in resume["jobs"]:
+            line = (
+                f"{j.get('JOB_TITLE','')} | "
+                f"{j.get('JOB_TITLE_ROLE','')} | "
+                f"{j.get('JOB_COMPANY_INDUSTRY','')} | "
+                f"Level: {j.get('LEVEL','')} | "
+                f"Start: {j.get('JOB_START_DATE','')} | "
+                f"Last verified: {j.get('JOB_LAST_VERIFIED','')}"
+            )
+            lines.append(line)
+        job_history_block = "\n".join(lines)
+
+    user_prompt = fill_template(
+        PROMPTS["ITI_USER_PROMPT"],
+        job_title=job.get("title", ""),
+        job_company=job.get("company", ""),
+        job_description=job.get("description", ""),
+        person_id=resume.get("PERSON_ID", resume.get("id", "")),
+        industry=resume.get("INDUSTRY", resume.get("industry", "")),
+        level=resume.get("LEVEL", resume.get("level", "")),
+        dataset_version=resume.get("DATASET_VERSION", resume.get("dataset_version", "")),
+        job_history_block=job_history_block,
+        skills_block=", ".join(resume.get("skills", [])),
+        education_block=resume.get("education_block", ""),
+        free_text_block=resume.get("free_text_block", "")
+    )
+
+    return {
+        "system": PROMPTS["ITI_SYSTEM_PROMPT"],
+        "user": user_prompt,
+    }
+    
+def score_iti(resume: Dict[str, Any], job: Dict[str, Any]) -> Dict[str, Any]:
+    prompts = build_iti_prompt(resume, job)
+    raw = call_llm(prompts["system"], prompts["user"])
+    return parse_iti_scores(raw)
+
 
 if __name__ == "__main__":
     print("model_runner.py loaded. Ready to screen resumes.")
